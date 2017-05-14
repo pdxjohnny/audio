@@ -43,10 +43,11 @@ class Client(object):
     def send(self, msg):
         return self.s.send(json.dumps(msg).encode('utf-8'))
 
-    def call(self, action, **kwargs):
+    def call(self, action, response=True, **kwargs):
         kwargs['action'] = action
         self.send(kwargs)
-        return self.response()
+        if response:
+            return self.response()
 
     def response(self):
         data = json.loads(self.s.recv(RECEIVE_LEN).decode('utf-8'))
@@ -80,6 +81,12 @@ class Client(object):
         for i in self.server_methods:
             print(getattr(self, i).__doc__.strip())
 
+    def wifi_reset(self):
+        '''
+        wifi_reset()
+        '''
+        self.call('wifi_reset', response=False)
+
     def load_file(self, filename):
         '''
         load_file(filename)
@@ -94,7 +101,8 @@ class Client(object):
         return self.response()
 
 def main():
-    c = Client(('192.168.4.1', 8080))
+    c = Client(('192.168.254.43', 8080))
+    # c = Client(('192.168.4.1', 8080))
     c.connect()
 
     if len(sys.argv) < 2:

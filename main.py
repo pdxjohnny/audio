@@ -80,6 +80,7 @@ class Config(object):
     def set(self, key, value):
         self.c_modified[key] = True
         self.c[key] = value
+        self.save()
 
 class WiFi(object):
     '''
@@ -226,6 +227,14 @@ class App(object):
         self.wifi = WiFi(self.config)
         self.serve = False
 
+    def socket_reset(self):
+        # Start the TCP server
+        addr = socket.getaddrinfo('0.0.0.0', DEFAULT_PORT)[0][-1]
+        self.s = socket.socket()
+        self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.s.bind(addr)
+        self.s.listen(1)
+
     def needs(self, d, *args):
         for a in args:
             if not a in d:
@@ -242,6 +251,9 @@ class App(object):
 
     def handle_wifi_reset(self, req, c):
         self.wifi.reset()
+        print('resetting socket', self.s)
+        self.socket_reset()
+        print('socket reset', self.s)
 
     def handle_load_file(self, req, c):
         self.needs(req, 'filename', 'length')
@@ -262,16 +274,11 @@ class App(object):
 
     def main(self):
         self.wifi.reset()
-        # Start the TCP server
-        addr = socket.getaddrinfo('0.0.0.0', DEFAULT_PORT)[0][-1]
-        s = socket.socket()
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(addr)
-        s.listen(1)
+        self.socket_reset()
         # Serve until we are told to reset
         self.serve = True
         while self.serve is not False:
-            c, addr = s.accept()
+            c, addr = self.s.accept()
             print('Connection from', addr)
             while True:
                 try:
@@ -300,10 +307,8 @@ class App(object):
                         break
             c.close()
             print('Done serving', addr)
-        # Save config
-        self.config.save()
         # Close the server
-        s.close()
+        self.s.close()
         # We were told to stop serving so reset the device
         machine.reset()
 
