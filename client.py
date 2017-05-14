@@ -94,7 +94,7 @@ class Client(object):
         return self.response()
 
 def main():
-    c = Client()
+    c = Client(('192.168.4.1', 8080))
     c.connect()
 
     if len(sys.argv) < 2:

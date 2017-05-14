@@ -2,7 +2,6 @@ import gc
 import esp
 import time
 import json
-import struct
 import socket
 import network
 import machine
@@ -129,6 +128,7 @@ class WiFi(object):
             print("Connecting...")
             # If we are anything other than connecting this is bad
             if status != network.STAT_CONNECTING:
+                print("Failed to connect")
                 return False
             time.sleep_ms(200)
             status = self.sta.status()
@@ -266,60 +266,40 @@ class App(object):
         addr = socket.getaddrinfo('0.0.0.0', DEFAULT_PORT)[0][-1]
         s = socket.socket()
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.settimeout(0.1)
         s.bind(addr)
         s.listen(1)
-        # Start the UDP discovery server
-        d = socket.socket(socket.AF_INET, socket.SOCK_DGRAM,
-                socket.IPPROTO_UDP)
-        d.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        d.settimeout(0.1)
-        d.bind(('0.0.0.0', DISCOVERY_PORT))
-        mreq = struct.pack("4sl", socket.inet_aton(DISCOVERY_GROUP),
-                socket.INADDR_ANY)
-        d.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
-                mreq)
         # Serve until we are told to reset
         self.serve = True
         while self.serve is not False:
-            # No select in micropython so use timouts as a hack
-            try:
-                ping, addr = d.recvfrom(4)
-                d.sendto(str(DEFAULT_PORT), addr)
-            except Exception as e:
-                continue
-            try:
-                c, addr = s.accept()
-                print('Connection from', addr)
-                while True:
+            c, addr = s.accept()
+            print('Connection from', addr)
+            while True:
+                try:
+                    req = c.recv(RECEIVE_LEN)
+                    print('Request', req)
+                    if len(req) == 0:
+                        break
+                    req = json.loads(req)
+                    self.needs(req, 'action')
+                    if not req['action'] in self.METHODS:
+                        c.send(json.dumps({"error": "no such method"}))
+                    else:
+                        m = self.METHODS[req['action']]
+                        self.needs(req, *m['args'])
+                        f = getattr(self,
+                                'handle_' + req['action'])
+                        f(req, c)
+                        if not m['response']:
+                            c.send(json.dumps({"error": False}))
+                except Exception as e:
+                    print('Error while serving request:', e)
                     try:
-                        req = c.recv(RECEIVE_LEN)
-                        if len(req) == 0:
-                            break
-                        print('Request', req)
-                        req = json.loads(req)
-                        self.needs(req, 'action')
-                        if not req['action'] in self.METHODS:
-                            c.send(json.dumps({"error": "no such method"}))
-                        else:
-                            m = self.METHODS[req['action']]
-                            self.needs(req, *m['args'])
-                            f = getattr(self,
-                                    'handle_' + req['action'])
-                            f(req, c)
-                            if not m['response']:
-                                c.send(json.dumps({"error": False}))
+                        c.send(json.dumps({"error": str(e)}))
                     except Exception as e:
-                        print('Error while serving request:', e)
-                        try:
-                            c.send(json.dumps({"error": str(e)}))
-                        except Exception as e:
-                            print("Couldn't send error to client", e)
-                            break
-                c.close()
-                print('Done serving', addr)
-            except Exception as e:
-                continue
+                        print("Couldn't send error to client", e)
+                        break
+            c.close()
+            print('Done serving', addr)
         # Save config
         self.config.save()
         # Close the server
