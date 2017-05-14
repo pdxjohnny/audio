@@ -6,6 +6,10 @@ import socket
 import network
 import machine
 
+PIN_XDCS = 15
+PIN_DREQ = 0
+PIN_MP3CS = 16
+PIN_SD_CS = 2
 RECEIVE_LEN = 2048
 AP_CONFIG_DEFAULT = {
         'essid': 'FEADFACE',
@@ -225,15 +229,17 @@ class App(object):
         if self.config.get('disable_debug'):
             esp.osdebug(None)
         self.wifi = WiFi(self.config)
-        self.serve = False
 
     def socket_reset(self):
         # Start the TCP server
         addr = socket.getaddrinfo('0.0.0.0', DEFAULT_PORT)[0][-1]
+        self.s = None
+        gc.collect()
         self.s = socket.socket()
         self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.s.bind(addr)
         self.s.listen(1)
+        self.s.setsockopt(socket.SOL_SOCKET, 20, self.accept_handler)
 
     def needs(self, d, *args):
         for a in args:
@@ -244,7 +250,8 @@ class App(object):
         c.send(json.dumps(self.METHODS))
 
     def handle_reset(self, req, c):
-        self.serve = False
+        self.s.close()
+        machine.reset()
 
     def handle_wifi_add(self, req, c):
         self.wifi.add(req['ssid'], req['password'], req['hidden'])
@@ -275,42 +282,37 @@ class App(object):
     def main(self):
         self.wifi.reset()
         self.socket_reset()
-        # Serve until we are told to reset
-        self.serve = True
-        while self.serve is not False:
-            c, addr = self.s.accept()
-            print('Connection from', addr)
-            while True:
+
+    def accept_handler(self, s):
+        c, addr = self.s.accept()
+        print('Connection from', addr)
+        while True:
+            try:
+                req = c.recv(RECEIVE_LEN)
+                print('Request', req)
+                if len(req) == 0:
+                    break
+                req = json.loads(req)
+                self.needs(req, 'action')
+                if not req['action'] in self.METHODS:
+                    c.send(json.dumps({"error": "no such method"}))
+                else:
+                    m = self.METHODS[req['action']]
+                    self.needs(req, *m['args'])
+                    f = getattr(self,
+                            'handle_' + req['action'])
+                    f(req, c)
+                    if not m['response']:
+                        c.send(json.dumps({"error": False}))
+            except Exception as e:
+                print('Error while serving request:', e)
                 try:
-                    req = c.recv(RECEIVE_LEN)
-                    print('Request', req)
-                    if len(req) == 0:
-                        break
-                    req = json.loads(req)
-                    self.needs(req, 'action')
-                    if not req['action'] in self.METHODS:
-                        c.send(json.dumps({"error": "no such method"}))
-                    else:
-                        m = self.METHODS[req['action']]
-                        self.needs(req, *m['args'])
-                        f = getattr(self,
-                                'handle_' + req['action'])
-                        f(req, c)
-                        if not m['response']:
-                            c.send(json.dumps({"error": False}))
+                    c.send(json.dumps({"error": str(e)}))
                 except Exception as e:
-                    print('Error while serving request:', e)
-                    try:
-                        c.send(json.dumps({"error": str(e)}))
-                    except Exception as e:
-                        print("Couldn't send error to client", e)
-                        break
-            c.close()
-            print('Done serving', addr)
-        # Close the server
-        self.s.close()
-        # We were told to stop serving so reset the device
-        machine.reset()
+                    print("Couldn't send error to client", e)
+                    break
+        c.close()
+        print('Done serving', addr)
 
 def main():
     app = App()
